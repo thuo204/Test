@@ -1,0 +1,50 @@
+FROM node:20-alpine AS base
+
+# Install system dependencies for ffmpeg and sharp
+RUN apk add --no-cache \
+    ffmpeg \
+    python3 \
+    make \
+    g++ \
+    libc6-compat
+
+WORKDIR /app
+
+# ---- Dependencies ----
+FROM base AS deps
+COPY package*.json ./
+RUN npm ci --only=production && npm cache clean --force
+
+# ---- Builder ----
+FROM base AS builder
+COPY package*.json ./
+RUN npm ci
+COPY . .
+
+# ---- Production ----
+FROM base AS runner
+
+ENV NODE_ENV=production
+ENV PORT=4000
+
+WORKDIR /app
+
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 expressjs
+
+# Copy production dependencies
+COPY --from=deps /app/node_modules ./node_modules
+COPY --chown=expressjs:nodejs . .
+
+# Create necessary directories
+RUN mkdir -p uploads/videos uploads/images uploads/temp logs /tmp/uploads && \
+    chown -R expressjs:nodejs uploads logs /tmp/uploads
+
+USER expressjs
+
+EXPOSE 4000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:4000/health || exit 1
+
+CMD ["node", "src/index.js"]
